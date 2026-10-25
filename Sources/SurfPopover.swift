@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SurfPopover: View {
     @ObservedObject var model: SurfModel
+    var changeSpot: () -> Void
     var scrolls = true
     @State private var launchAtLogin = LoginItem.isEnabled
 
@@ -28,8 +29,9 @@ struct SurfPopover: View {
                     weatherCard(report)
                 }
                 .fixedSize(horizontal: false, vertical: true)
-                tideCard(report)
+                if !report.tideCurve.isEmpty { tideCard(report) }
                 buoyCard(report)
+                footer(report)
             } else if model.isLoading {
                 ProgressView("Checking the buoys…")
                     .frame(maxWidth: .infinity, minHeight: 200)
@@ -52,8 +54,15 @@ struct SurfPopover: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Del Mar").font(.system(size: 20, weight: .bold))
-                Text("North San Diego").font(.caption).foregroundStyle(.secondary)
+                Button(action: changeSpot) {
+                    HStack(spacing: 4) {
+                        Text(model.spot.name).font(.system(size: 20, weight: .bold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Change spot")
+                Text(model.spot.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             if let fetched = model.report?.fetchedAt {
@@ -123,7 +132,7 @@ struct SurfPopover: View {
                         .rotationEffect(.degrees(wind.directionDeg + 180))
                         .foregroundStyle(.secondary)
                 }
-                let kind = Surf.windKind(fromDeg: wind.directionDeg)
+                let kind = Surf.windKind(fromDeg: wind.directionDeg, offshoreFrom: model.spot.offshoreFromDeg)
                 Text(kind.rawValue + (wind.gustKts.map { ", gusts \(Int($0.rounded()))" } ?? ""))
                     .font(.caption)
                     .foregroundStyle(kind == .offshore ? Color.green : kind == .onshore ? Color.orange : Color.secondary)
@@ -156,7 +165,7 @@ struct SurfPopover: View {
     }
 
     private func tideCard(_ report: SurfReport) -> some View {
-        Card(title: "TIDE · LA JOLLA", icon: "arrow.up.and.down") {
+        Card(title: "TIDE · \((model.spot.tideStation?.name ?? "").uppercased())", icon: "arrow.up.and.down") {
             HStack(alignment: .firstTextBaseline) {
                 if let now = report.tideNow {
                     Text("\(now.heightFt, specifier: "%.1f")ft").font(.system(size: 17, weight: .semibold, design: .rounded))
@@ -207,12 +216,12 @@ struct SurfPopover: View {
     }
 
     private func buoyCard(_ report: SurfReport) -> some View {
-        Card(title: "BUOYS", icon: "dot.radiowaves.left.and.right") {
+        Card(title: report.wavesFromModel ? "WAVES (MODEL)" : "BUOYS", icon: "dot.radiowaves.left.and.right") {
             if let near = report.nearshore {
-                buoyRow("Del Mar Nearshore", near)
+                buoyRow(report.wavesFromModel ? "Open-Meteo wave model" : model.spot.waveBuoy?.name ?? "Buoy", near)
             }
             if let outer = report.outer {
-                buoyRow("Torrey Pines Outer", outer)
+                buoyRow(model.spot.outerBuoy?.name ?? "Outer buoy", outer)
             }
             if report.nearshoreHistory.count > 3 {
                 Chart(report.nearshoreHistory, id: \.time) { reading in
@@ -228,7 +237,8 @@ struct SurfPopover: View {
                 }
                 .chartYScale(domain: sparklineDomain(report.nearshoreHistory))
                 .frame(height: 34)
-                Text("Del Mar Nearshore, last 24 hours (ft)").font(.system(size: 9)).foregroundStyle(.tertiary)
+                Text("\(report.wavesFromModel ? "Wave model" : model.spot.waveBuoy?.name ?? "Buoy"), last 24 hours (ft)")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
         }
     }
@@ -250,8 +260,26 @@ struct SurfPopover: View {
         }
     }
 
+    private func footer(_ report: SurfReport) -> some View {
+        let spot = model.spot
+        var parts: [String] = []
+        parts.append(report.wavesFromModel ? "Waves: Open-Meteo model" : "Waves: NDBC \(spot.waveBuoy?.id ?? "")")
+        parts.append(report.windFromModel ? "Wind: Open-Meteo" : "Wind: NDBC \(spot.windStation?.id ?? "")")
+        if let tide = spot.tideStation { parts.append("Tide: NOAA \(tide.id)") }
+        parts.append("Weather: Open-Meteo")
+        return HStack(alignment: .firstTextBaseline) {
+            Text(parts.joined(separator: " · ")).font(.system(size: 9)).foregroundStyle(.tertiary)
+            Spacer()
+            Button("Surfline") { SurflineWindow.show(spot) }
+                .buttonStyle(.link)
+                .font(.caption)
+        }
+    }
+
     private var settingsMenu: some View {
         Menu {
+            Button("Change Spot…", action: changeSpot)
+            Divider()
             Toggle("Open at Login", isOn: Binding(get: { launchAtLogin }, set: {
                 LoginItem.set($0)
                 launchAtLogin = LoginItem.isEnabled

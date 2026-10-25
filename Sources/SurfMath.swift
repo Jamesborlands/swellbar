@@ -2,12 +2,10 @@ import SwiftUI
 
 /// Turns buoy readings into Surfline-style surf heights, ratings and labels.
 enum Surf {
-    /// Scales the Komar–Gaughan breaking-height estimate to match Surfline's Del Mar numbers.
+    /// Scales the Komar–Gaughan breaking-height estimate to match Surfline. Tuned at Del Mar;
+    /// other beaches may read a little high or low.
     /// Calibrated 2026-10-18: Del Mar Nearshore buoy 0.7 m @ 17 s, Surfline reported 3–4 ft+.
     static let calibration = 0.80
-
-    /// Del Mar's beaches face roughly west, so wind *from* the east is offshore.
-    static let offshoreFromDeg = 85.0
 
     static func breakingHeightFt(buoyHeightFt: Double, periodS: Double) -> Double {
         let h = buoyHeightFt * 0.3048
@@ -52,8 +50,9 @@ enum Surf {
         case offshore = "Offshore", crossShore = "Cross-shore", onshore = "Onshore"
     }
 
-    static func windKind(fromDeg: Double) -> WindKind {
-        var diff = abs(fromDeg - offshoreFromDeg).truncatingRemainder(dividingBy: 360)
+    /// offshoreFrom: the direction offshore wind blows from (the beach faces the opposite way).
+    static func windKind(fromDeg: Double, offshoreFrom: Double) -> WindKind {
+        var diff = abs(fromDeg - offshoreFrom).truncatingRemainder(dividingBy: 360)
         if diff > 180 { diff = 360 - diff }
         switch diff {
         case ..<50: return .offshore
@@ -101,7 +100,7 @@ enum Surf {
     }
 
     /// A rough quality call from size, period and wind — Swellbar's own estimate, not Surfline's forecaster rating.
-    static func rating(range: Range, periodS: Double, wind: WindReading?) -> Rating {
+    static func rating(range: Range, periodS: Double, wind: WindReading?, offshoreFrom: Double) -> Rating {
         guard range.hi > 1 || range.plus else { return .flat }
         var level: Int
         switch range.lo {
@@ -112,7 +111,7 @@ enum Surf {
         }
         if periodS >= 14 && range.lo >= 4 { level += 1 }
         if let wind {
-            switch windKind(fromDeg: wind.directionDeg) {
+            switch windKind(fromDeg: wind.directionDeg, offshoreFrom: offshoreFrom) {
             case .onshore where wind.speedKts >= 10: level -= 2
             case .onshore where wind.speedKts >= 6: level -= 1
             case .crossShore where wind.speedKts >= 12: level -= 1

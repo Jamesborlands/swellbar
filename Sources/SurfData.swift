@@ -53,6 +53,8 @@ struct SurfReport {
     var tideCurve: [TidePoint] = []
     var tideEvents: [TideEvent] = []
     var hourly: [HourlyWeather] = []
+    var wavesFromModel = false // no buoy: Open-Meteo wave model
+    var windFromModel = false // no wind station: Open-Meteo forecast
     var fetchedAt = Date()
 
     /// Today's tide height right now, interpolated from the prediction curve.
@@ -65,31 +67,29 @@ struct SurfReport {
     }
 }
 
-/// Public data for Del Mar: CDIP buoys via NDBC, NOAA tides (La Jolla / Scripps Pier), NWS weather.
+/// Public data for any spot: NDBC buoys and shore stations, NOAA tide predictions, and
+/// Open-Meteo for weather (and for waves and wind where there's no station nearby).
 enum SurfAPI {
-    static let nearshoreBuoy = "46266" // CDIP 153 Del Mar Nearshore
-    static let outerBuoy = "46225" // CDIP 100 Torrey Pines Outer
-    static let windStation = "LJPC1" // Scripps Pier, La Jolla
-    static let tideStation = "9410230" // La Jolla (Scripps Pier)
-    static let nwsHourly = "https://api.weather.gov/gridpoints/SGX/54,25/forecast/hourly"
-
-    static let pacific = TimeZone(identifier: "America/Los_Angeles")!
-
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.httpAdditionalHeaders = ["User-Agent": "Swellbar/1.0 (personal surf menu bar app)"]
+        config.httpAdditionalHeaders = ["User-Agent": "Swellbar/1.1 (github.com/Jamesborlands/swellbar)"]
         return URLSession(configuration: config)
     }()
 
-    static func fetchReport() async -> SurfReport {
-        async let nearText = text("https://www.ndbc.noaa.gov/data/realtime2/\(nearshoreBuoy).txt")
-        async let nearSpec = text("https://www.ndbc.noaa.gov/data/realtime2/\(nearshoreBuoy).spec")
-        async let outerText = text("https://www.ndbc.noaa.gov/data/realtime2/\(outerBuoy).txt")
-        async let windText = text("https://www.ndbc.noaa.gov/data/realtime2/\(windStation).txt")
-        async let tides = tideData()
-        async let hourly = hourlyWeather()
+    private static func ndbc(_ station: Station?, _ ext: String) async -> String? {
+        guard let station else { return nil }
+        return await text("https://www.ndbc.noaa.gov/data/realtime2/\(station.id).\(ext)")
+    }
+
+    static func fetchReport(spot: Spot) async -> SurfReport {
+        async let nearText = ndbc(spot.waveBuoy, "txt")
+        async let nearSpec = ndbc(spot.waveBuoy, "spec")
+        async let outerText = ndbc(spot.outerBuoy, "txt")
+        async let windText = ndbc(spot.windStation, "txt")
+        async let tides = tideData(spot.tideStation)
+        async let forecast = openMeteo(spot)
 
         var report = SurfReport()
         if let rows = await nearText.map(ndbcRows) {
@@ -116,10 +116,23 @@ enum SurfAPI {
             report.wind = WindReading(time: time, speedKts: num(row["WSPD"])! * 1.94384,
                                       gustKts: num(row["GST"]).map { $0 * 1.94384 }, directionDeg: num(row["WDIR"])!)
         }
+        // No buoy (or it's down): use the wave model. No wind station: forecast wind.
+        if report.nearshore == nil, let model = await waveModel(spot) {
+            report.nearshore = model.reading
+            report.nearshoreHistory = model.history
+            report.swell = model.swell
+            report.windSwell = model.windSwell
+            report.wavesFromModel = true
+        }
+        let weather = await forecast
+        report.hourly = weather.hourly
+        if report.wind == nil {
+            report.wind = weather.wind
+            report.windFromModel = weather.wind != nil
+        }
         let tideResult = await tides
         report.tideCurve = tideResult.curve
         report.tideEvents = significantTides(tideResult.events)
-        report.hourly = await hourly
         report.fetchedAt = Date()
         return report
     }
@@ -157,17 +170,23 @@ enum SurfAPI {
 
     // MARK: Tides
 
-    private static func tideData() async -> (curve: [TidePoint], events: [TideEvent]) {
+    private static func tideData(_ station: Station?) async -> (curve: [TidePoint], events: [TideEvent]) {
+        guard let station else { return ([], []) }
+        let utc = TimeZone(identifier: "UTC")!
         let formatter = DateFormatter()
-        formatter.timeZone = pacific
-        formatter.dateFormat = "yyyyMMdd"
-        let today = formatter.string(from: Date())
-        let base = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?station=\(tideStation)&product=predictions&datum=MLLW&units=english&time_zone=lst_ldt&format=json"
-        async let curveJSON = json("\(base)&interval=15&begin_date=\(today)&range=24")
-        async let eventJSON = json("\(base)&interval=hilo&begin_date=\(today)&range=48")
+        formatter.timeZone = utc
+        formatter.dateFormat = "yyyyMMdd HH:mm"
+        // Curve: 12 hours either side of now. Highs and lows: the next two days.
+        let curveStart = formatter.string(from: Date().addingTimeInterval(-12 * 3600))
+        let eventStart = formatter.string(from: Date().addingTimeInterval(-3600))
+        let base = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?station=\(station.id)&product=predictions&datum=MLLW&units=english&time_zone=gmt&format=json"
+        let curveURL = "\(base)&interval=15&begin_date=\(curveStart.replacingOccurrences(of: " ", with: "%20"))&range=24"
+        let eventURL = "\(base)&interval=hilo&begin_date=\(eventStart.replacingOccurrences(of: " ", with: "%20"))&range=48"
+        async let curveJSON = json(curveURL)
+        async let eventJSON = json(eventURL)
 
         let stamp = DateFormatter()
-        stamp.timeZone = pacific
+        stamp.timeZone = utc
         stamp.dateFormat = "yyyy-MM-dd HH:mm"
         func predictions(_ object: Any?) -> [[String: String]] {
             ((object as? [String: Any])?["predictions"] as? [[String: String]]) ?? []
@@ -193,30 +212,96 @@ enum SurfAPI {
         return result
     }
 
-    // MARK: Weather
+    // MARK: Open-Meteo (worldwide, no key)
 
-    private static func hourlyWeather() async -> [HourlyWeather] {
-        guard let object = await json(nwsHourly) as? [String: Any],
-              let periods = (object["properties"] as? [String: Any])?["periods"] as? [[String: Any]] else { return [] }
-        let iso = ISO8601DateFormatter()
-        return periods.prefix(24).compactMap { p in
-            guard let start = (p["startTime"] as? String).flatMap(iso.date(from:)),
-                  let temp = p["temperature"] as? Int else { return nil }
-            let mph = (p["windSpeed"] as? String)?.split(separator: " ").first.flatMap { Double($0) } ?? 0
-            return HourlyWeather(time: start, tempF: temp, windKts: mph * 0.868976,
-                                 windDirection: p["windDirection"] as? String ?? "", summary: p["shortForecast"] as? String ?? "")
+    private static let meteoTime: DateFormatter = {
+        let f = DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")!
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        return f
+    }()
+
+    /// Hourly weather for the next 24 hours, plus current wind.
+    private static func openMeteo(_ spot: Spot) async -> (hourly: [HourlyWeather], wind: WindReading?) {
+        let url = "https://api.open-meteo.com/v1/forecast?latitude=\(spot.lat)&longitude=\(spot.lon)"
+            + "&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+            + "&hourly=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&forecast_hours=24"
+            + "&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=GMT"
+        guard let object = await json(url) as? [String: Any] else { return ([], nil) }
+        var wind: WindReading?
+        if let c = object["current"] as? [String: Any], let speed = c["wind_speed_10m"] as? Double, let dir = c["wind_direction_10m"] as? Double {
+            wind = WindReading(time: (c["time"] as? String).flatMap(meteoTime.date(from:)) ?? Date(),
+                               speedKts: speed, gustKts: c["wind_gusts_10m"] as? Double, directionDeg: dir)
+        }
+        guard let h = object["hourly"] as? [String: Any], let times = h["time"] as? [String] else { return ([], wind) }
+        let temps = h["temperature_2m"] as? [Double?] ?? [], codes = h["weather_code"] as? [Int?] ?? []
+        let speeds = h["wind_speed_10m"] as? [Double?] ?? [], dirs = h["wind_direction_10m"] as? [Double?] ?? []
+        let hourly = times.indices.compactMap { i -> HourlyWeather? in
+            guard let t = meteoTime.date(from: times[i]), i < temps.count, let temp = temps[i] else { return nil }
+            let code = i < codes.count ? codes[i] ?? 0 : 0
+            return HourlyWeather(time: t, tempF: Int(temp.rounded()), windKts: i < speeds.count ? speeds[i] ?? 0 : 0,
+                                 windDirection: i < dirs.count ? dirs[i].map(Surf.compass) ?? "" : "", summary: weatherSummary(code))
+        }
+        return (hourly, wind)
+    }
+
+    /// Modeled waves (Open-Meteo Marine) for spots without a buoy nearby.
+    private static func waveModel(_ spot: Spot) async -> (reading: BuoyReading, history: [BuoyReading], swell: SwellComponent?, windSwell: SwellComponent?)? {
+        let vars = "wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction,wind_wave_height,wind_wave_period,wind_wave_direction,sea_surface_temperature"
+        let url = "https://marine-api.open-meteo.com/v1/marine?latitude=\(spot.lat)&longitude=\(spot.lon)"
+            + "&current=\(vars)&hourly=wave_height,swell_wave_period,wave_period&past_days=1&forecast_days=1&timezone=GMT"
+        guard let object = await json(url) as? [String: Any], let c = object["current"] as? [String: Any],
+              let h = c["wave_height"] as? Double else { return nil }
+        let period = (c["swell_wave_period"] as? Double) ?? (c["wave_period"] as? Double) ?? 0
+        let reading = BuoyReading(time: (c["time"] as? String).flatMap(meteoTime.date(from:)) ?? Date(), heightFt: h * 3.28084,
+                                  periodS: period, directionDeg: c["wave_direction"] as? Double,
+                                  waterTempF: (c["sea_surface_temperature"] as? Double).map { $0 * 9 / 5 + 32 })
+        func component(_ prefix: String) -> SwellComponent? {
+            guard let h = c["\(prefix)_height"] as? Double, let p = c["\(prefix)_period"] as? Double else { return nil }
+            return SwellComponent(heightFt: h * 3.28084, periodS: p, direction: (c["\(prefix)_direction"] as? Double).map(Surf.compass) ?? "")
+        }
+        var history: [BuoyReading] = []
+        if let hr = object["hourly"] as? [String: Any], let times = hr["time"] as? [String],
+           let heights = hr["wave_height"] as? [Double?] {
+            let periods = hr["swell_wave_period"] as? [Double?] ?? []
+            let now = Date()
+            for i in times.indices where i < heights.count {
+                guard let t = meteoTime.date(from: times[i]), t <= now, now.timeIntervalSince(t) <= 24 * 3600, let hh = heights[i] else { continue }
+                history.append(BuoyReading(time: t, heightFt: hh * 3.28084, periodS: (i < periods.count ? periods[i] : nil) ?? period,
+                                           directionDeg: nil, waterTempF: nil))
+            }
+        }
+        return (reading, history, component("swell_wave"), component("wind_wave"))
+    }
+
+    /// WMO weather codes, as Open-Meteo reports them.
+    private static func weatherSummary(_ code: Int) -> String {
+        switch code {
+        case 0: return "Clear"
+        case 1: return "Mostly clear"
+        case 2: return "Partly cloudy"
+        case 3: return "Cloudy"
+        case 45, 48: return "Fog"
+        case 51...57: return "Drizzle"
+        case 61...67: return "Rain"
+        case 71...77: return "Snow"
+        case 80...82: return "Showers"
+        case 85, 86: return "Snow showers"
+        case 95...99: return "Thunderstorms"
+        default: return ""
         }
     }
 
     // MARK: Networking
 
-    private static func text(_ url: String) async -> String? {
+    static func text(_ url: String) async -> String? {
         guard let url = URL(string: url), let (data, response) = try? await session.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    private static func json(_ url: String) async -> Any? {
+    static func json(_ url: String) async -> Any? {
         guard let url = URL(string: url), let (data, response) = try? await session.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return try? JSONSerialization.jsonObject(with: data)

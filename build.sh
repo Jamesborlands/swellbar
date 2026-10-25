@@ -4,8 +4,12 @@ set -euo pipefail
 cd "${0:A:h}"
 
 mkdir -p build
-swiftc -O -swift-version 5 -target arm64-apple-macosx14.0 -sdk "$(xcrun --show-sdk-path)" \
-  Sources/*.swift -o build/Swellbar
+# Universal binary: Apple silicon and Intel.
+for arch in arm64 x86_64; do
+  swiftc -O -swift-version 5 -target $arch-apple-macosx14.0 -sdk "$(xcrun --show-sdk-path)" \
+    Sources/*.swift -o build/Swellbar-$arch
+done
+lipo -create build/Swellbar-arm64 build/Swellbar-x86_64 -output build/Swellbar
 
 if [[ ! -f Resources/AppIcon.icns ]]; then
   iconset=build/AppIcon.iconset
@@ -26,6 +30,12 @@ cp Resources/Info.plist $app/Contents/Info.plist
 cp Resources/AppIcon.icns $app/Contents/Resources/AppIcon.icns
 codesign --force --sign - $app
 echo "Built $app"
+
+if [[ "${1:-}" == "--zip" ]]; then
+  rm -f build/Swellbar.zip
+  ditto -c -k --keepParent $app build/Swellbar.zip
+  echo "Zipped build/Swellbar.zip"
+fi
 
 if [[ "${1:-}" == "--install" ]]; then
   pkill -x Swellbar 2>/dev/null && sleep 1 || true
