@@ -43,6 +43,17 @@ struct HourlyWeather: Identifiable {
     var id: Date { time }
 }
 
+/// One day of the multi-day outlook: daytime surf from the wave model, morning wind, weather.
+struct DayForecast: Identifiable {
+    let date: Date // local midnight
+    var surfFt: Double // breaking height, daytime average
+    let periodS: Double
+    let wind: WindReading? // morning average, when wind matters most
+    let summary: String
+    let highF: Int?
+    var id: Date { date }
+}
+
 struct SurfReport {
     var nearshore: BuoyReading?
     var nearshoreHistory: [BuoyReading] = []
@@ -53,6 +64,7 @@ struct SurfReport {
     var tideCurve: [TidePoint] = []
     var tideEvents: [TideEvent] = []
     var hourly: [HourlyWeather] = []
+    var forecast: [DayForecast] = []
     var wavesFromModel = false // no buoy: Open-Meteo wave model
     var windFromModel = false // no wind station: Open-Meteo forecast
     var fetchedAt = Date()
@@ -90,6 +102,7 @@ enum SurfAPI {
         async let windText = ndbc(spot.windStation, "txt")
         async let tides = tideData(spot.tideStation)
         async let forecast = openMeteo(spot)
+        async let outlook = dailyForecast(spot)
 
         var report = SurfReport()
         if let rows = await nearText.map(ndbcRows) {
@@ -129,6 +142,13 @@ enum SurfAPI {
         if report.wind == nil {
             report.wind = weather.wind
             report.windFromModel = weather.wind != nil
+        }
+        // The wave model reads open water, so scale the outlook to match today's buoy-based surf.
+        let days = await outlook
+        report.forecast = days.days
+        if !report.wavesFromModel, let near = report.nearshore, let modelNow = days.nowFt, modelNow > 0.3 {
+            let ratio = min(max(Surf.breakingHeightFt(buoyHeightFt: near.heightFt, periodS: near.periodS) / modelNow, 0.5), 1.5)
+            for i in report.forecast.indices { report.forecast[i].surfFt *= ratio }
         }
         let tideResult = await tides
         report.tideCurve = tideResult.curve
@@ -273,6 +293,76 @@ enum SurfAPI {
             }
         }
         return (reading, history, component("swell_wave"), component("wind_wave"))
+    }
+
+    /// The five days after today (the hero already covers today): Open-Meteo Marine waves and Open-Meteo weather, grouped by local day.
+    /// nowFt is the model's breaking height for the current hour, for matching it to the buoy.
+    private static func dailyForecast(_ spot: Spot) async -> (days: [DayForecast], nowFt: Double?) {
+        let marineURL = "https://marine-api.open-meteo.com/v1/marine?latitude=\(spot.lat)&longitude=\(spot.lon)"
+            + "&hourly=wave_height,wave_period,swell_wave_period&forecast_days=6&timezone=auto"
+        let weatherURL = "https://api.open-meteo.com/v1/forecast?latitude=\(spot.lat)&longitude=\(spot.lon)"
+            + "&hourly=wind_speed_10m,wind_direction_10m&daily=weather_code,temperature_2m_max&forecast_days=6"
+            + "&temperature_unit=fahrenheit&wind_speed_unit=kn&timezone=auto"
+        async let marineJSON = json(marineURL)
+        async let weatherJSON = json(weatherURL)
+        guard let marine = await marineJSON as? [String: Any], let h = marine["hourly"] as? [String: Any],
+              let times = h["time"] as? [String], let heights = h["wave_height"] as? [Double?] else { return ([], nil) }
+        let weather = await weatherJSON as? [String: Any]
+
+        // Times are local to the spot ("2026-10-24T06:00"): group by the date part, filter by the hour.
+        let local = DateFormatter()
+        local.locale = Locale(identifier: "en_US_POSIX")
+        local.timeZone = TimeZone(secondsFromGMT: marine["utc_offset_seconds"] as? Int ?? 0)
+        local.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        let swellPeriods = h["swell_wave_period"] as? [Double?] ?? [], wavePeriods = h["wave_period"] as? [Double?] ?? []
+        func hour(_ t: String) -> Int { Int(t.dropFirst(11).prefix(2)) ?? 0 }
+
+        var surf: [String: [(ft: Double, period: Double)]] = [:]
+        var nowFt: Double?
+        let now = Date()
+        for i in times.indices where i < heights.count {
+            guard let height = heights[i] else { continue }
+            let period = (i < swellPeriods.count ? swellPeriods[i] : nil) ?? (i < wavePeriods.count ? wavePeriods[i] : nil) ?? 0
+            let ft = Surf.breakingHeightFt(buoyHeightFt: height * 3.28084, periodS: period)
+            if let t = local.date(from: times[i]), abs(t.timeIntervalSince(now)) < 1800 { nowFt = ft }
+            if (6...18).contains(hour(times[i])) { surf[String(times[i].prefix(10)), default: []].append((ft, period)) }
+        }
+
+        var wind: [String: [(speed: Double, deg: Double)]] = [:]
+        if let wh = weather?["hourly"] as? [String: Any], let wt = wh["time"] as? [String] {
+            let speeds = wh["wind_speed_10m"] as? [Double?] ?? [], dirs = wh["wind_direction_10m"] as? [Double?] ?? []
+            for i in wt.indices where (6...10).contains(hour(wt[i])) && i < speeds.count && i < dirs.count {
+                if let s = speeds[i], let d = dirs[i] { wind[String(wt[i].prefix(10)), default: []].append((s, d)) }
+            }
+        }
+        var summaries: [String: String] = [:], highs: [String: Int] = [:]
+        if let daily = weather?["daily"] as? [String: Any], let dt = daily["time"] as? [String] {
+            let codes = daily["weather_code"] as? [Int?] ?? [], temps = daily["temperature_2m_max"] as? [Double?] ?? []
+            for i in dt.indices {
+                if i < codes.count, let c = codes[i] { summaries[dt[i]] = weatherSummary(c) }
+                if i < temps.count, let t = temps[i] { highs[dt[i]] = Int(t.rounded()) }
+            }
+        }
+
+        let dayFormat = DateFormatter()
+        dayFormat.locale = Locale(identifier: "en_US_POSIX")
+        dayFormat.timeZone = local.timeZone
+        dayFormat.dateFormat = "yyyy-MM-dd"
+        let today = String(local.string(from: now).prefix(10))
+        let days = surf.keys.sorted().filter { $0 > today }.prefix(5).compactMap { key -> DayForecast? in
+            guard let samples = surf[key], !samples.isEmpty, let date = dayFormat.date(from: key) else { return nil }
+            var morning: WindReading?
+            if let w = wind[key], !w.isEmpty {
+                // Average the wind as a vector so 350° and 10° don't average to 180°.
+                let x = w.map { $0.speed * cos($0.deg * .pi / 180) }.reduce(0, +), y = w.map { $0.speed * sin($0.deg * .pi / 180) }.reduce(0, +)
+                let deg = (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+                morning = WindReading(time: date, speedKts: w.map(\.speed).reduce(0, +) / Double(w.count), gustKts: nil, directionDeg: deg)
+            }
+            return DayForecast(date: date, surfFt: samples.map(\.ft).reduce(0, +) / Double(samples.count),
+                               periodS: samples.map(\.period).max() ?? 0, wind: morning,
+                               summary: summaries[key] ?? "", highF: highs[key])
+        }
+        return (days, nowFt)
     }
 
     /// WMO weather codes, as Open-Meteo reports them.

@@ -30,7 +30,7 @@ struct SurfPopover: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 if !report.tideCurve.isEmpty { tideCard(report) }
-                buoyCard(report)
+                if !report.forecast.isEmpty { forecastCard(report) }
                 footer(report)
             } else if model.isLoading {
                 ProgressView("Checking the buoys…")
@@ -215,48 +215,31 @@ struct SurfPopover: View {
         }
     }
 
-    private func buoyCard(_ report: SurfReport) -> some View {
-        Card(title: report.wavesFromModel ? "WAVES (MODEL)" : "BUOYS", icon: "dot.radiowaves.left.and.right") {
-            if let near = report.nearshore {
-                buoyRow(report.wavesFromModel ? "Open-Meteo wave model" : model.spot.waveBuoy?.name ?? "Buoy", near)
-            }
-            if let outer = report.outer {
-                buoyRow(model.spot.outerBuoy?.name ?? "Outer buoy", outer)
-            }
-            if report.nearshoreHistory.count > 3 {
-                Chart(report.nearshoreHistory, id: \.time) { reading in
-                    LineMark(x: .value("Time", reading.time), y: .value("Height", reading.heightFt))
-                        .foregroundStyle(Color.blue.gradient)
-                        .interpolationMethod(.catmullRom)
-                }
-                .chartXAxis(.hidden)
-                .chartYAxis {
-                    AxisMarks(position: .leading, values: .automatic(desiredCount: 2)) { value in
-                        AxisValueLabel { if let v = value.as(Double.self) { Text("\(v, specifier: "%.1f")") } }
+    private func forecastCard(_ report: SurfReport) -> some View {
+        Card(title: "NEXT \(report.forecast.count) DAYS", icon: "calendar") {
+            ForEach(report.forecast) { day in
+                let range = Surf.range(day.surfFt)
+                let rating = Surf.rating(range: range, periodS: day.periodS, wind: day.wind, offshoreFrom: model.spot.offshoreFromDeg)
+                HStack(spacing: 8) {
+                    Text(day.date.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(.caption).frame(width: 40, alignment: .leading)
+                    Circle().fill(rating.color).frame(width: 7, height: 7)
+                    Text(range.spaced).font(.system(size: 12, weight: .semibold, design: .rounded)).frame(width: 58, alignment: .leading)
+                    Text("\(Int(day.periodS.rounded()))s").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 26, alignment: .leading)
+                    if let wind = day.wind {
+                        let kind = Surf.windKind(fromDeg: wind.directionDeg, offshoreFrom: model.spot.offshoreFromDeg)
+                        Text("\(Int(wind.speedKts.rounded()))kt \(Surf.compass(wind.directionDeg))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(kind == .offshore ? Color.green : kind == .onshore ? Color.orange : Color.secondary)
+                            .frame(width: 58, alignment: .leading)
                     }
+                    Spacer()
+                    Text([day.highF.map { "\($0)°" }, day.summary.isEmpty ? nil : day.summary].compactMap { $0 }.joined(separator: " "))
+                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                .chartYScale(domain: sparklineDomain(report.nearshoreHistory))
-                .frame(height: 34)
-                Text("\(report.wavesFromModel ? "Wave model" : model.spot.waveBuoy?.name ?? "Buoy"), last 24 hours (ft)")
-                    .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
-        }
-    }
-
-    private func sparklineDomain(_ readings: [BuoyReading]) -> ClosedRange<Double> {
-        let heights = readings.map(\.heightFt)
-        let lo = heights.min() ?? 0, hi = heights.max() ?? 1
-        return max(0, lo - 0.4)...(hi + 0.4)
-    }
-
-    private func buoyRow(_ name: String, _ reading: BuoyReading) -> some View {
-        HStack {
-            Text(name).font(.caption)
-            Spacer()
-            Text("\(reading.heightFt, specifier: "%.1f")ft · \(Int(reading.periodS))s\(reading.directionDeg.map { " · \(Surf.compass($0)) \(Int($0))°" } ?? "")")
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-            Text(reading.time.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+            Text(report.wavesFromModel ? "Wave model · morning wind" : "Wave model scaled to today's buoy · morning wind")
+                .font(.system(size: 9)).foregroundStyle(.tertiary)
         }
     }
 
@@ -266,7 +249,7 @@ struct SurfPopover: View {
         parts.append(report.wavesFromModel ? "Waves: Open-Meteo model" : "Waves: NDBC \(spot.waveBuoy?.id ?? "")")
         parts.append(report.windFromModel ? "Wind: Open-Meteo" : "Wind: NDBC \(spot.windStation?.id ?? "")")
         if let tide = spot.tideStation { parts.append("Tide: NOAA \(tide.id)") }
-        parts.append("Weather: Open-Meteo")
+        parts.append("Weather + forecast: Open-Meteo")
         return HStack(alignment: .firstTextBaseline) {
             Text(parts.joined(separator: " · ")).font(.system(size: 9)).foregroundStyle(.tertiary)
             Spacer()

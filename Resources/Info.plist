@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleIdentifier</key><string>io.github.jamesborlands.swellbar</string>
+	<key>CFBundleIdentifier</key><string>io.github.jamesborlands.swellbar-app</string>
 	<key>CFBundleName</key><string>Swellbar</string>
 	<key>CFBundleDisplayName</key><string>Swellbar</string>
 	<key>CFBundleExecutable</key><string>Swellbar</string>

@@ -7,8 +7,8 @@
 <p align="center"><img src="docs/menubar.png" width="460" alt="Swellbar in the menu bar: a colored dot and 3-4+"></p>
 
 Swellbar puts the current surf height in your menu bar (`● 3-4+`), with the dot colored by
-how good it is. Click it for swell, wind, water temperature, weather, a tide chart and buoy
-readings. It works for any beach: search for yours and Swellbar finds the nearest buoys and
+how good it is. Click it for swell, wind, water temperature, weather, a tide chart and a
+five-day forecast. It works for any beach: search for yours and Swellbar finds the nearest buoys and
 stations on its own. No account, no API keys, free public data.
 
 <p align="center">
@@ -16,6 +16,13 @@ stations on its own. No account, no API keys, free public data.
   &nbsp;
   <img src="docs/popover-huntington.png" width="320" alt="Swellbar report for Huntington Beach, California">
 </p>
+
+## Five-day forecast
+
+Under the tide chart, **Next 5 Days** shows each day's surf, swell period, morning wind
+(green when it's offshore, orange when it's onshore), the high temperature and the sky. The
+surf comes from the Open-Meteo wave model. Where there's a buoy, the forecast is scaled so it
+lines up with what the buoy says right now.
 
 ## Pick your spot
 
@@ -110,9 +117,12 @@ consistently high or low next to Surfline, adjust that one number and rebuild.
 The README screenshots are rendered by the app itself from live data:
 
 ```sh
-build/Swellbar.app/Contents/MacOS/Swellbar --snapshot docs/popover-delmar.png --snapshot-menubar docs/menubar.png
-build/Swellbar.app/Contents/MacOS/Swellbar --spot "Huntington Beach Pier" --snapshot docs/popover-huntington.png --snapshot-picker docs/spot-picker.png
+scripts/snapshots.sh
 ```
+
+Don't run `build/Swellbar.app/Contents/MacOS/Swellbar` straight from a terminal: macOS then files
+Swellbar's menu bar icon under the terminal app, and hides it whenever that app is off in
+System Settings > Menu Bar. Launch it with `open` (the script does).
 
 ## License
 
