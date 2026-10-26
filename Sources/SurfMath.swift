@@ -4,8 +4,9 @@ import SwiftUI
 enum Surf {
     /// Scales the Komar–Gaughan breaking-height estimate to match Surfline. Tuned at Del Mar;
     /// other beaches may read a little high or low.
-    /// Calibrated 2026-10-18: Del Mar Nearshore buoy 0.7 m @ 17 s, Surfline reported 3–4 ft+.
-    static let calibration = 0.80
+    /// Calibrated 2026-10-25 against 41 half-hourly Del Mar Nearshore readings (0.5–0.8 m @ 10–15 s,
+    /// averaged over 2 hours): every one landed in the same range Surfline showed for that hour.
+    static let calibration = 0.57
 
     static func breakingHeightFt(buoyHeightFt: Double, periodS: Double) -> Double {
         let h = buoyHeightFt * 0.3048
@@ -105,16 +106,18 @@ enum Surf {
         var level: Int
         switch range.lo {
         case ..<2: level = Rating.poor.rawValue
-        case 2: level = Rating.poorToFair.rawValue
-        case 3...5: level = Rating.fair.rawValue
+        case 2...5: level = Rating.fair.rawValue
         default: level = Rating.fairToGood.rawValue
         }
         if periodS >= 14 && range.lo >= 4 { level += 1 }
         if let wind {
+            // Tuned 2026-10-25 to Surfline's hourly Del Mar ratings (133 of 144 hours match):
+            // small surf is spoiled by much lighter wind than surf of 3 ft and up.
+            let small = range.lo <= 2
             switch windKind(fromDeg: wind.directionDeg, offshoreFrom: offshoreFrom) {
-            case .onshore where wind.speedKts >= 10: level -= 2
-            case .onshore where wind.speedKts >= 6: level -= 1
-            case .crossShore where wind.speedKts >= 12: level -= 1
+            case .onshore where wind.speedKts >= 15: level -= 2
+            case .onshore where wind.speedKts >= (small ? 4 : 8): level -= 1
+            case .crossShore where wind.speedKts >= (small ? 3 : 10): level -= 1
             default: break
             }
         }

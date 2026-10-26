@@ -12,8 +12,8 @@ final class SurfModel: ObservableObject {
     var onUpdate: (() -> Void)?
 
     var surfRange: Surf.Range? {
-        guard let near = report?.nearshore else { return nil }
-        return Surf.range(Surf.breakingHeightFt(buoyHeightFt: near.heightFt, periodS: near.periodS))
+        guard let ft = report?.surfNowFt else { return nil }
+        return Surf.range(ft)
     }
 
     var rating: Surf.Rating? {

@@ -69,6 +69,15 @@ struct SurfReport {
     var windFromModel = false // no wind station: Open-Meteo forecast
     var fetchedAt = Date()
 
+    /// Breaking height now: the last 2 hours of buoy readings averaged, because single readings
+    /// jump a whole 0.1 m step from one half hour to the next.
+    var surfNowFt: Double? {
+        guard let latest = nearshore else { return nil }
+        let recent = nearshoreHistory.filter { latest.time.timeIntervalSince($0.time) < 2 * 3600 }
+        let readings = recent.isEmpty ? [latest] : recent
+        return readings.map { Surf.breakingHeightFt(buoyHeightFt: $0.heightFt, periodS: $0.periodS) }.reduce(0, +) / Double(readings.count)
+    }
+
     /// Today's tide height right now, interpolated from the prediction curve.
     var tideNow: (heightFt: Double, rising: Bool)? {
         let now = Date()
@@ -146,8 +155,8 @@ enum SurfAPI {
         // The wave model reads open water, so scale the outlook to match today's buoy-based surf.
         let days = await outlook
         report.forecast = days.days
-        if !report.wavesFromModel, let near = report.nearshore, let modelNow = days.nowFt, modelNow > 0.3 {
-            let ratio = min(max(Surf.breakingHeightFt(buoyHeightFt: near.heightFt, periodS: near.periodS) / modelNow, 0.5), 1.5)
+        if !report.wavesFromModel, let nowFt = report.surfNowFt, let modelNow = days.nowFt, modelNow > 0.3 {
+            let ratio = min(max(nowFt / modelNow, 0.5), 1.5)
             for i in report.forecast.indices { report.forecast[i].surfFt *= ratio }
         }
         let tideResult = await tides
