@@ -13,50 +13,62 @@ struct SpotPicker: View {
     @State private var finding = false
     @State private var picked: Spot?
     @State private var surfline = ""
+    @FocusState private var searchFocused: Bool
 
     private static let directions: [(String, Double)] = [("N", 0), ("NE", 45), ("E", 90), ("SE", 135), ("S", 180), ("SW", 225), ("W", 270), ("NW", 315)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Where do you surf?").font(.system(size: 20, weight: .bold))
-            HStack {
-                TextField("Beach, town or \"lat, lon\"", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(search)
-                Button("Search", action: search).disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            if searching {
-                ProgressView().controlSize(.small)
-            } else if !results.isEmpty && picked == nil {
-                VStack(alignment: .leading, spacing: 2) {
+            Text("Where do you surf?").font(.title.weight(.bold))
+            searchField
+            if !results.isEmpty && picked == nil && !finding {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(results) { place in
                         Button { choose(place) } label: {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(place.name)
-                                Text(place.subtitle).font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 10) {
+                                Image(systemName: "mappin.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.white, .red)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(place.name)
+                                    if !place.subtitle.isEmpty {
+                                        Text(place.subtitle).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer(minLength: 0)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 4)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(RowPlate())
                     }
                 }
+                .padding(4)
+                .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             if finding {
-                HStack { ProgressView().controlSize(.small); Text("Finding the nearest buoys and stations…").foregroundStyle(.secondary) }
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Finding the nearest buoys and stations…").foregroundStyle(.secondary)
+                }
             }
             if let spot = picked {
                 details(spot)
-            } else if !finding {
-                Button("Use Del Mar, CA") { picked = .delMar; surfline = Spot.delMar.surflineURL ?? "" }
-                    .buttonStyle(.link)
+            } else if !finding && results.isEmpty && !searching {
+                Button {
+                    picked = .delMar
+                    surfline = Spot.delMar.surflineURL ?? ""
+                } label: {
+                    Label("Use Del Mar, CA", systemImage: "location")
+                }
+                .buttonStyle(.glass)
             }
             Spacer(minLength: 0)
             HStack {
                 Text("Now: \(current.name)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Cancel") { done(nil) }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { done(nil) }
+                    .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.glass)
                 Button("Use This Spot") {
                     guard var spot = picked else { return }
                     let url = surfline.trimmingCharacters(in: .whitespaces)
@@ -64,25 +76,69 @@ struct SpotPicker: View {
                     done(spot)
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.glassProminent)
                 .disabled(picked == nil)
             }
+            .controlSize(.large)
         }
-        .padding(20)
+        .padding(.horizontal, 22)
+        .padding(.bottom, 20)
+        .padding(.top, 30) // clear of the transparent title bar
         .frame(width: 460)
-        .frame(minHeight: 520, alignment: .top)
+        .frame(minHeight: 500, alignment: .top)
         .onAppear {
             if let preview {
                 query = preview.query
                 picked = preview.spot
             }
+            searchFocused = preview == nil
         }
+        // Search as you type, once typing pauses.
+        .task(id: query) {
+            guard preview == nil else { return }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            await search(choosingSingle: false)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Beach, town or \"lat, lon\"", text: $query)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onSubmit { Task { await search(choosingSingle: true) } }
+            if searching {
+                ProgressView().controlSize(.small)
+            } else if !query.isEmpty {
+                Button {
+                    query = ""
+                    results = []
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+            }
+        }
+        .font(.title3)
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(.fill.quaternary, in: Capsule())
     }
 
     private func details(_ spot: Spot) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(spot.name).font(.headline)
-                Text(spot.subtitle).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Image(systemName: "mappin.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white, .red)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(spot.name).font(.headline)
+                    Text(spot.subtitle).font(.caption).foregroundStyle(.secondary)
+                }
             }
             VStack(alignment: .leading, spacing: 5) {
                 row("Waves", "water.waves", spot.waveBuoy, missing: "No buoy nearby: using the Open-Meteo wave model")
@@ -90,9 +146,9 @@ struct SpotPicker: View {
                 row("Wind", "wind", spot.windStation, missing: "No station nearby: using the Open-Meteo forecast")
                 row("Tide", "arrow.up.and.down", spot.tideStation, missing: "No NOAA tide station nearby (US only)")
             }
-            .padding(10)
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+            .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 Text("Beach faces").font(.subheadline.weight(.semibold))
                 Picker("", selection: Binding(get: { nearestDirection(spot.facingDeg) }, set: { picked?.facingDeg = $0 })) {
@@ -105,7 +161,11 @@ struct SpotPicker: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Surfline page (optional)").font(.subheadline.weight(.semibold))
-                TextField("https://www.surfline.com/surf-report/…", text: $surfline).textFieldStyle(.roundedBorder)
+                TextField("https://www.surfline.com/surf-report/…", text: $surfline)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
     }
@@ -132,16 +192,21 @@ struct SpotPicker: View {
         return d > 180 ? d - 360 : d < -180 ? d + 360 : d
     }
 
-    private func search() {
+    /// Return picks the place when only one matches (typed coordinates, a precise name).
+    private func search(choosingSingle: Bool) async {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return }
+        guard !q.isEmpty else {
+            results = []
+            searching = false
+            return
+        }
         picked = nil
         searching = true
-        Task {
-            results = await PlaceSearch.search(q)
-            searching = false
-            if results.count == 1 { choose(results[0]) }
-        }
+        let found = await PlaceSearch.search(q)
+        guard q == query.trimmingCharacters(in: .whitespaces) else { return } // typed on meanwhile
+        results = found
+        searching = false
+        if choosingSingle && found.count == 1 { choose(found[0]) }
     }
 
     private func choose(_ place: Place) {
@@ -152,6 +217,26 @@ struct SpotPicker: View {
             picked = spot
             surfline = ""
             finding = false
+        }
+    }
+}
+
+/// A list row that highlights on hover, like a menu or sidebar row.
+struct RowPlate: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Plate(configuration: configuration) }
+
+    private struct Plate: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(.fill.secondary.opacity(configuration.isPressed ? 1 : hovering ? 0.6 : 0),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
         }
     }
 }

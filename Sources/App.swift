@@ -124,16 +124,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var spotWindow: NSWindow?
     private var previewSpot: Spot? // --spot, for screenshots
 
-    func showSpotPicker() {
+    func showSpotPicker(preview: (query: String, spot: Spot?)? = nil) {
         popover.performClose(nil)
         if spotWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
-                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                             styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
             w.title = "Swellbar Spot"
+            w.titleVisibility = .hidden
+            w.titlebarAppearsTransparent = true
+            w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
             spotWindow = w
         }
-        spotWindow?.contentViewController = NSHostingController(rootView: SpotPicker(current: model.spot) { [weak self] spot in
+        spotWindow?.contentViewController = NSHostingController(rootView: SpotPicker(current: model.spot, preview: preview) { [weak self] spot in
             if let spot { self?.model.setSpot(spot) }
             self?.spotWindow?.close()
         })
@@ -162,18 +165,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             model.refreshIfStale()
             sizePopover()
+            // Follow the system's light or dark mode, like Control Center, not the menu bar's tint.
+            let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            popover.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
     }
 
-    /// `Swellbar --snapshot out.png` renders the popover to an image once data loads (README
+    /// `Swellbar --snapshot out.png` opens the popover once data loads and captures it (README
     /// screenshots and testing). `--spot "Huntington Beach"` reports on that place for this
-    /// run without saving it. `--snapshot-picker out.png` renders the spot picker for it,
-    /// `--snapshot-menubar out.png` the menu bar title. `--surfline-snapshot out.png` renders
-    /// the embedded Surfline window.
+    /// run without saving it. `--snapshot-picker out.png` captures the spot picker for it,
+    /// `--snapshot-menubar out.png` renders the menu bar title. `--appearance light|dark` picks
+    /// the look. `--surfline-snapshot out.png` renders the embedded Surfline window.
     private func handleTestArguments() {
         let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--appearance"), i + 1 < args.count {
+            NSApp.appearance = NSAppearance(named: args[i + 1] == "light" ? .aqua : .darkAqua)
+        }
         if let i = args.firstIndex(of: "--spot"), i + 1 < args.count {
             Task { @MainActor in
                 if let place = await PlaceSearch.search(args[i + 1]).first {
@@ -187,9 +196,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let i = args.firstIndex(of: "--snapshot-picker"), i + 1 < args.count {
             let out = URL(fileURLWithPath: args[i + 1])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [self] in // after --snapshot, which needs the popover
                 let query = args.firstIndex(of: "--spot").map { args[$0 + 1] } ?? ""
-                Self.render(SpotPicker(current: .delMar, preview: (query, self.previewSpot ?? .delMar)) { _ in }, to: out)
+                showSpotPicker(preview: (query, previewSpot ?? .delMar))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+                    WindowShot.write(spotWindow, to: out)
+                    spotWindow?.close()
+                }
             }
         }
         if let i = args.firstIndex(of: "--snapshot-menubar"), i + 1 < args.count {
@@ -218,15 +231,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
             let out = URL(fileURLWithPath: args[i + 1])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [self] in
-                Self.render(SurfPopover(model: model, changeSpot: {}, scrolls: false), to: out)
-                print("menu bar:", statusItem.button?.attributedTitle.string ?? "", "|", statusItem.button?.toolTip ?? "")
-                fflush(stdout)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9) { [self] in snapshotPopover(to: out) }
         }
     }
 
-    /// Draws a SwiftUI view (dark mode) into a PNG at 2x.
+    /// Opens the popover and captures it, trying again if it closed first (it's transient, so
+    /// another app activating can dismiss it).
+    private func snapshotPopover(to out: URL, tries: Int = 3) {
+        if !popover.isShown { togglePopover() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+            guard popover.isShown, WindowShot.write(popover.contentViewController?.view.window, to: out) else {
+                if tries > 1 { snapshotPopover(to: out, tries: tries - 1) }
+                return
+            }
+            popover.performClose(nil)
+            print("menu bar:", statusItem.button?.attributedTitle.string ?? "", "|", statusItem.button?.toolTip ?? "")
+            fflush(stdout)
+        }
+    }
+
+    /// Draws a SwiftUI view (dark mode) into a PNG at 2x. No Liquid Glass here: that's drawn by
+    /// the window server, so live windows go through `WindowShot` instead.
     static func render<V: View>(_ view: V, to url: URL) {
         let host = NSHostingView(rootView: view.background(Color(white: 0.14)).environment(\.colorScheme, .dark))
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
@@ -245,6 +270,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("wrote", url.path)
         fflush(stdout)
         _ = window
+    }
+}
+
+/// Captures one of Swellbar's own windows as the window server draws it, Liquid Glass and all.
+/// An app may capture its own windows without Screen Recording permission. CGWindowListCreateImage
+/// is unavailable in the macOS 26 SDK but still ships, so it's looked up at runtime.
+@MainActor
+enum WindowShot {
+    private typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+
+    @discardableResult
+    static func write(_ window: NSWindow?, to url: URL) -> Bool {
+        guard let window, let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return false }
+        let create = unsafeBitCast(sym, to: CreateImage.self)
+        // optionIncludingWindow; boundsIgnoreFraming | bestResolution
+        guard let image = create(.null, 1 << 3, UInt32(window.windowNumber), 1 << 0 | 1 << 3)?.takeRetainedValue(),
+              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
+              (try? png.write(to: url)) != nil else { return false }
+        print("wrote", url.path, image.width, "x", image.height)
+        fflush(stdout)
+        return true
     }
 }
 

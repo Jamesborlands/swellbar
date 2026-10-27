@@ -6,7 +6,7 @@ cd "${0:A:h}"
 mkdir -p build
 # Universal binary: Apple silicon and Intel.
 for arch in arm64 x86_64; do
-  swiftc -O -swift-version 5 -target $arch-apple-macosx14.0 -sdk "$(xcrun --show-sdk-path)" \
+  swiftc -O -swift-version 5 -target $arch-apple-macosx26.0 -sdk "$(xcrun --show-sdk-path)" \
     Sources/*.swift -o build/Swellbar-$arch
 done
 lipo -create build/Swellbar-arm64 build/Swellbar-x86_64 -output build/Swellbar

@@ -6,6 +6,7 @@ struct SurfPopover: View {
     var changeSpot: () -> Void
     var scrolls = true
     @State private var launchAtLogin = LoginItem.isEnabled
+    @Environment(\.colorScheme) private var colorScheme
 
     @ViewBuilder var body: some View {
         if scrolls {
@@ -40,6 +41,8 @@ struct SurfPopover: View {
                     Image(systemName: "wifi.exclamationmark").font(.title)
                     Text("Couldn't reach the buoy data.")
                     Button("Try Again") { model.refresh() }
+                        .buttonStyle(.glassProminent)
+                        .padding(.top, 4)
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 200)
@@ -52,47 +55,54 @@ struct SurfPopover: View {
     // MARK: Sections
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 1) {
                 Button(action: changeSpot) {
-                    HStack(spacing: 4) {
-                        Text(model.spot.name).font(.system(size: 20, weight: .bold)).lineLimit(1)
-                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                    HStack(spacing: 5) {
+                        Text(model.spot.name).font(.title2.weight(.bold)).lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverPlate())
                 .help("Change spot")
-                Text(model.spot.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text([model.spot.subtitle, model.report.map { "Updated \($0.fetchedAt.formatted(date: .omitted, time: .shortened))" }]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer()
-            if let fetched = model.report?.fetchedAt {
-                Text("Updated \(fetched.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 6) {
+                    Button {
+                        model.refresh()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .symbolEffect(.rotate, options: .repeat(.continuous), isActive: model.isLoading)
+                            .frame(width: 16, height: 16)
+                    }
+                    .help("Refresh")
+                    settingsMenu
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
             }
-            Button {
-                model.refresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .rotationEffect(.degrees(model.isLoading ? 360 : 0))
-                    .animation(model.isLoading ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: model.isLoading)
-            }
-            .buttonStyle(.borderless)
-            .help("Refresh")
-            settingsMenu
         }
     }
 
     private func hero(range: Surf.Range, near: BuoyReading) -> some View {
         let rating = model.rating ?? .fair
         return HStack(alignment: .center, spacing: 14) {
-            RoundedRectangle(cornerRadius: 3)
+            Capsule()
                 .fill(rating.color)
-                .frame(width: 6, height: 66)
+                .frame(width: 5, height: 64)
             VStack(alignment: .leading, spacing: 4) {
                 Text(rating.label)
-                    .font(.system(size: 11, weight: .heavy))
-                    .tracking(0.8)
-                    .foregroundStyle(rating.color)
+                    .font(.caption.weight(.heavy))
+                    .tracking(0.6)
+                    // The yellows and greens wash out on light glass; deepen them a little there.
+                    .foregroundStyle(colorScheme == .light ? rating.color.mix(with: .black, by: 0.25) : rating.color)
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text("\(range.lo)-\(range.hi)").font(.system(size: 40, weight: .bold, design: .rounded))
                     Text("ft\(range.plus ? "+" : "")").font(.system(size: 18, weight: .semibold, design: .rounded))
@@ -101,6 +111,7 @@ struct SurfPopover: View {
             }
             Spacer()
         }
+        .padding(.horizontal, 2)
     }
 
     private func swellCard(_ report: SurfReport, near: BuoyReading) -> some View {
@@ -196,7 +207,7 @@ struct SurfPopover: View {
                             .interpolationMethod(.catmullRom)
                     }
                     RuleMark(x: .value("Now", Date()))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(Color.primary.opacity(0.45))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                 }
                 .chartXAxis {
@@ -206,7 +217,7 @@ struct SurfPopover: View {
                 }
                 .chartYAxis {
                     AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                        AxisGridLine().foregroundStyle(.quaternary)
+                        AxisGridLine().foregroundStyle(Color.primary.opacity(0.12))
                         AxisValueLabel { if let v = value.as(Double.self) { Text("\(Int(v))") } }
                     }
                 }
@@ -250,13 +261,20 @@ struct SurfPopover: View {
         parts.append(report.windFromModel ? "Wind: Open-Meteo" : "Wind: NDBC \(spot.windStation?.id ?? "")")
         if let tide = spot.tideStation { parts.append("Tide: NOAA \(tide.id)") }
         parts.append("Weather + forecast: Open-Meteo")
-        return HStack(alignment: .firstTextBaseline) {
+        return HStack(alignment: .center, spacing: 10) {
             Text(parts.joined(separator: " · ")).font(.system(size: 9)).foregroundStyle(.tertiary)
-            Spacer()
-            Button("Surfline") { SurflineWindow.show(spot) }
-                .buttonStyle(.link)
-                .font(.caption)
+            Spacer(minLength: 0)
+            Button { SurflineWindow.show(spot) } label: {
+                HStack(spacing: 3) {
+                    Text("Surfline")
+                    Image(systemName: "arrow.up.forward").font(.caption2.weight(.semibold))
+                }
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .help("Open Surfline's report for \(spot.name)")
         }
+        .padding(.horizontal, 2)
     }
 
     private var settingsMenu: some View {
@@ -274,10 +292,14 @@ struct SurfPopover: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
+        .frame(width: 32, height: 32)
+        .contentShape(Circle())
+        .glassEffect(.regular.interactive(), in: Circle()) // the glass button style doesn't reach menus
+        .help("Settings")
     }
 }
 
+/// A report module: a quiet fill like a Control Center module, so the glass stays on the controls.
 struct Card<Content: View>: View {
     let title: String
     let icon: String
@@ -286,12 +308,35 @@ struct Card<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Label(title, systemImage: icon)
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
+                .padding(.bottom, 1)
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+        .padding(12)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// A borderless button that shows a soft plate on hover and press, like a toolbar title menu.
+struct HoverPlate: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Plate(configuration: configuration) }
+
+    private struct Plate: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.fill.tertiary.opacity(configuration.isPressed ? 1 : hovering ? 0.6 : 0),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .padding(.horizontal, -6)
+        }
     }
 }

@@ -12,9 +12,9 @@ five-day forecast. It works for any beach: search for yours and Swellbar finds t
 stations on its own. No account, no API keys, free public data.
 
 <p align="center">
-  <img src="docs/popover-delmar.png" width="320" alt="Swellbar report for Del Mar, California">
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/popover-delmar-light.png"><img src="docs/popover-delmar.png" width="320" alt="Swellbar report for Del Mar, California"></picture>
   &nbsp;
-  <img src="docs/popover-huntington.png" width="320" alt="Swellbar report for Huntington Beach, California">
+  <picture><source media="(prefers-color-scheme: light)" srcset="docs/popover-huntington-light.png"><img src="docs/popover-huntington.png" width="320" alt="Swellbar report for Huntington Beach, California"></picture>
 </p>
 
 ## Five-day forecast
@@ -29,7 +29,8 @@ lines up with what the buoy says right now.
 The first time Swellbar opens, it asks where you surf. To change it later, click the spot
 name at the top of the report, or the gear > **Change Spot…**.
 
-1. Type a beach or town (or coordinates like `21.66, -158.05`) and press Return.
+1. Type a beach or town (or coordinates like `21.66, -158.05`). Matches show up as you type;
+   click one (Return picks it when there's only one).
 2. Swellbar finds the nearest wave buoy, outer buoy, wind station and tide station, and
    shows how far away each one is.
 3. Check **Beach faces**: the way you look when you face the waves. Swellbar guesses it from
@@ -37,7 +38,7 @@ name at the top of the report, or the gear > **Change Spot…**.
 4. Optionally paste the spot's Surfline page, so the **Surfline** link opens it.
 5. Click **Use This Spot**.
 
-<p align="center"><img src="docs/spot-picker.png" width="420" alt="The spot picker, showing the stations found for Huntington Beach"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/spot-picker-light.png"><img src="docs/spot-picker.png" width="420" alt="The spot picker, showing the stations found for Huntington Beach"></picture></p>
 
 ### Outside the US
 
@@ -46,7 +47,7 @@ NOAA buoys and tide predictions mostly cover the US. Anywhere else, Swellbar use
 hides the tide card. Model waves are for open water just offshore, so they can read bigger
 than what breaks on the beach.
 
-<p align="center"><img src="docs/popover-biarritz.png" width="320" alt="Swellbar report for Biarritz, France, from the wave model"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: light)" srcset="docs/popover-biarritz-light.png"><img src="docs/popover-biarritz.png" width="320" alt="Swellbar report for Biarritz, France, from the wave model"></picture></p>
 
 ## Install
 
@@ -65,7 +66,7 @@ Swellbar adds itself to Login Items on first launch. Turn that off in the gear m
 
 ### Build from source
 
-You need macOS 14 or later and Xcode or the Command Line Tools (`xcode-select --install`).
+You need macOS 26 or later and Xcode or the Command Line Tools (`xcode-select --install`).
 
 ```sh
 git clone https://github.com/Jamesborlands/swellbar.git
@@ -114,7 +115,8 @@ consistently high or low next to Surfline, adjust that one number and rebuild.
 | `Sources/SurfPopover.swift` | The report |
 | `scripts/make_icon.swift` | Draws the app icon |
 
-The README screenshots are rendered by the app itself from live data:
+The README screenshots (dark, plus `-light.png` versions) are captured by the app itself from
+live data:
 
 ```sh
 scripts/snapshots.sh
